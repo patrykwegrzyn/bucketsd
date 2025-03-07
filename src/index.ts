@@ -78,6 +78,7 @@ export class Bucketsd {
       },
       { ...producer?.topic }
     );
+    this.producer.setPollInterval(10);
   }
 
   private handleStoreChange(ev: {
@@ -102,18 +103,26 @@ export class Bucketsd {
         : Buffer.isBuffer(value)
         ? value
         : Buffer.from(value);
-    console.log({ messageValue });
+    try {
+      this.producer.produce(
+        this.topic,
+        null,
+        messageValue,
+        id,
+        Date.now(),
+        null,
+        headers
+      );
+    } catch (err: unknown) {
+      const error = err as LibrdKafkaError;
 
-    const res = this.producer.produce(
-      this.topic,
-      null,
-      messageValue,
-      id,
-      Date.now(),
-      null,
-      headers
-    );
-    console.log({ res });
+      if (CODES.ERRORS.ERR__QUEUE_FULL === error.code) {
+        console.log("Queue full, re-buffering message");
+        this.producer.poll();
+      } else {
+        throw err;
+      }
+    }
   }
 
   private queryWatermark(partition: number): Promise<void> {
