@@ -7,15 +7,20 @@ import {
   ProducerTopicConfig,
   Assignment,
   Message,
+  LibrdKafkaError,
+  AdminClient,
+  CODES,
+  NewTopic,
 } from "@confluentinc/kafka-javascript";
+
 import { RootDatabaseOptions } from "lmdbx";
 import { Buffer } from "buffer";
 import { Store } from "buckets";
 import { once } from "events";
+
 import { getAssigments, getMetadata } from "./util";
 
 type Options = {
-  topic: string;
   appId: string;
   brokers: string[];
   store?: RootDatabaseOptions;
@@ -27,6 +32,7 @@ type Options = {
     global: ProducerGlobalConfig;
     topic?: ProducerTopicConfig;
   };
+  createTopicOptions?: NewTopic;
 };
 
 export class Bucketsd {
@@ -38,13 +44,16 @@ export class Bucketsd {
   store: Store;
   watermarks = new Map<number, number>();
   topicOffsets = new Map<number, number>();
+  createTopicOptions?: NewTopic;
 
   constructor(options: Options) {
-    const { topic, appId, brokers, store, consumer, producer } = options;
-    this.topic = topic;
+    const { createTopicOptions, appId, brokers, store, consumer, producer } =
+      options;
+    this.topic = createTopicOptions ? createTopicOptions.topic : `${appId}.kv`;
     this.appId = appId;
+    this.createTopicOptions = createTopicOptions;
 
-    this.store = new Store(`${appId}:buckets`, { cache: true, ...store });
+    this.store = new Store(`db/${appId}`, { cache: true, ...store });
     this.store.on("change", (ev) => this.handleStoreChange(ev));
 
     const brokerList = Array.isArray(brokers)
@@ -79,7 +88,7 @@ export class Bucketsd {
     ttl?: string;
   }) {
     const { op, bucket, id, value, ttl } = ev;
-    console.log(value, JSON.parse(value as string));
+    // console.log(value, JSON.parse(value as string));
 
     // Construct headers array
     const headers = [];
@@ -93,8 +102,9 @@ export class Bucketsd {
         : Buffer.isBuffer(value)
         ? value
         : Buffer.from(value);
+    console.log({ messageValue });
 
-    this.producer.produce(
+    const res = this.producer.produce(
       this.topic,
       null,
       messageValue,
@@ -103,6 +113,7 @@ export class Bucketsd {
       null,
       headers
     );
+    console.log({ res });
   }
 
   private queryWatermark(partition: number): Promise<void> {
@@ -138,15 +149,33 @@ export class Bucketsd {
       once(this.consumer, "ready"),
       once(this.producer, "ready"),
     ]);
+    const admin = AdminClient.createFrom(this.consumer);
 
-    const metadata = await getMetadata(this.consumer, {});
-    const assignments = getAssigments(metadata, [this.topic]);
-    this.consumer.assign(assignments);
-    await this.setupPartitionStatus(assignments);
+    admin.createTopic(
+      {
+        num_partitions: 5,
+        replication_factor: 3,
+        config: {
+          "segment.ms": "300000",
+          "segment.bytes": "102400",
+          "cleanup.policy": "compact",
+        },
+        ...{ ...this.createTopicOptions, topic: this.topic },
+      },
+      async (err) => {
+        if (err && err.code !== CODES.ERRORS.ERR_TOPIC_ALREADY_EXISTS) {
+          throw err;
+        }
 
-    this.consumer.consume();
+        const metadata = await getMetadata(this.consumer, {});
+        const assignments = getAssigments(metadata, [this.topic]);
+        this.consumer.assign(assignments);
+        await this.setupPartitionStatus(assignments);
 
-    this.consumer.on("data", (message) => this.handleConsumerData(message));
+        this.consumer.consume();
+        this.consumer.on("data", (message) => this.handleConsumerData(message));
+      }
+    );
 
     await this.waitUntilCaughtUp();
   }
@@ -199,8 +228,11 @@ export class Bucketsd {
     this.consumer.unsubscribe();
     this.consumer.pause(this.consumer.assignments());
 
-    this.producer.disconnect();
-    this.consumer.disconnect();
+    this.producer.flush(5000, (err: LibrdKafkaError) => {
+      console.log(err);
+      this.producer.disconnect();
+      this.consumer.disconnect();
+    });
 
     await Promise.all(
       [this.consumer, this.producer].map((client) =>
