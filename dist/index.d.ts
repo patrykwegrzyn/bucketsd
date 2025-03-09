@@ -1,5 +1,5 @@
 import { KafkaConsumer, Producer, NewTopic, ConsumerGlobalConfig, ConsumerTopicConfig, ProducerGlobalConfig, ProducerTopicConfig, Assignment } from '@confluentinc/kafka-javascript';
-import { RootDatabaseOptions } from 'lmdbx';
+import { RootDatabaseOptions } from 'lmdb';
 import { Store } from 'buckets';
 
 type Options = {

@@ -24,7 +24,8 @@
   "description": "",
   "dependencies": {
     "@confluentinc/kafka-javascript": "^1.2.0",
-    "buckets": "github:patrykwegrzyn/buckets"
+    "buckets": "github:patrykwegrzyn/buckets",
+    "lmdb": "^3.2.6"
   },
   "devDependencies": {
     "@types/events": "^3.0.3",

@@ -13,7 +13,7 @@ import {
   NewTopic,
 } from "@confluentinc/kafka-javascript";
 
-import { RootDatabaseOptions } from "lmdbx";
+import { RootDatabaseOptions, asBinary } from "lmdb";
 import { Buffer } from "buffer";
 import { Store } from "buckets";
 import { once } from "events";
@@ -53,7 +53,7 @@ export class Bucketsd {
     this.appId = appId;
     this.createTopicOptions = createTopicOptions;
 
-    this.store = new Store(`db/${appId}`, { cache: true, ...store });
+    this.store = new Store(`db/${appId}`, { cache: false, ...store });
     this.store.on("change", (ev) => this.handleStoreChange(ev));
 
     const brokerList = Array.isArray(brokers)
@@ -78,7 +78,7 @@ export class Bucketsd {
       },
       { ...producer?.topic }
     );
-    this.producer.setPollInterval(10);
+    this.producer.setPollInterval(100);
   }
 
   private handleStoreChange(ev: {
@@ -89,6 +89,7 @@ export class Bucketsd {
     ttl?: string;
   }) {
     const { op, bucket, id, value, ttl } = ev;
+
     // console.log(value, JSON.parse(value as string));
 
     // Construct headers array
@@ -110,7 +111,7 @@ export class Bucketsd {
         messageValue,
         id,
         Date.now(),
-        null,
+        undefined,
         headers
       );
     } catch (err: unknown) {
@@ -202,9 +203,11 @@ export class Bucketsd {
     );
 
     if (message.key && headers?.bucket && headers?.op) {
-      const kv = this.store.bucket(headers.bucket, { encoding: "json" });
-      if (headers.op === "put") {
-        kv.put(message.key.toString(), message.value, { quiet: true });
+      const kv = this.store.bucket(headers.bucket);
+      if (headers.op === "put" && message.value) {
+        kv.put(message.key.toString(), asBinary(message.value), {
+          quiet: true,
+        });
       } else {
         kv.remove(message.key.toString(), { quiet: true });
       }
